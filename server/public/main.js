@@ -230,6 +230,7 @@ const audioElements = {};   // remoteId -> HTMLAudioElement
 let localStream = null;
 const peersShareLocal = {}; // remoteId -> bool (did we add local tracks to this pc)
 let localSharedCount = 0;    // how many PCs have our local tracks
+const pendingCandidates = {}; // remoteId -> [candidate] (buffered before setRemoteDescription)
 const pcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
 async function getLocalStream() {
@@ -263,6 +264,8 @@ function ensureAudioElement(id) {
 async function createPeerConnection(remoteId, shareLocal = false) {
   if (peerConnections[remoteId]) return peerConnections[remoteId];
   const pc = new RTCPeerConnection(pcConfig);
+  // Store immediately so ICE candidates arriving during async getUserMedia are not dropped
+  peerConnections[remoteId] = pc;
 
   pc.onicecandidate = (e) => {
     if (e.candidate) {
@@ -273,6 +276,7 @@ async function createPeerConnection(remoteId, shareLocal = false) {
   pc.ontrack = (e) => {
     const el = ensureAudioElement(remoteId);
     el.srcObject = e.streams[0];
+    el.play().catch(() => {});
     const active = document.getElementById('active-calls');
     if (active) active.textContent = Object.keys(peerConnections).join(', ');
   };
@@ -288,8 +292,17 @@ async function createPeerConnection(remoteId, shareLocal = false) {
     }
   }
 
-  peerConnections[remoteId] = pc;
   return pc;
+}
+
+async function flushPendingCandidates(remoteId) {
+  const pc = peerConnections[remoteId];
+  const queue = pendingCandidates[remoteId];
+  if (!pc || !queue) return;
+  delete pendingCandidates[remoteId];
+  for (const c of queue) {
+    try { await pc.addIceCandidate(c); } catch (e) {}
+  }
 }
 
 function updateActiveCallsDisplay() {
@@ -363,6 +376,7 @@ socket.on('webrtc-offer', async ({ from, offer }) => {
   const pc = await createPeerConnection(from, share);
   try {
     await pc.setRemoteDescription(offer);
+    await flushPendingCandidates(from);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     socket.emit('webrtc-answer', { to: from, answer: pc.localDescription });
@@ -376,14 +390,22 @@ socket.on('webrtc-answer', async ({ from, answer }) => {
   if (!pc) return;
   try {
     await pc.setRemoteDescription(answer);
+    await flushPendingCandidates(from);
   } catch (e) {
     console.warn('Failed to set remote description from answer', e);
   }
 });
 
 socket.on('webrtc-ice-candidate', async ({ from, candidate }) => {
+  if (!candidate) return;
   const pc = peerConnections[from];
-  if (!pc || !candidate) return;
+  if (!pc) return;
+  // Buffer if remote description not yet set; flush happens after setRemoteDescription
+  if (!pc.remoteDescription) {
+    if (!pendingCandidates[from]) pendingCandidates[from] = [];
+    pendingCandidates[from].push(candidate);
+    return;
+  }
   try {
     await pc.addIceCandidate(candidate);
   } catch (e) {
