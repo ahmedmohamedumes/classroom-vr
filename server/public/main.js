@@ -30,6 +30,7 @@ sun.position.set(5, 10, 5);
 sun.castShadow = true;
 scene.add(sun);
 
+
 // ---------- Collision boxes ----------
 const collisionBoxes = [];
 export function addCollisionBox(minX, minY, minZ, maxX, maxY, maxZ) {
@@ -587,6 +588,8 @@ function applyLocalMovement(dt, xrFrame = null) {
   if (!renderer.xr.isPresenting) {
     local.mesh.position.y = 0;
   }
+
+  return dir.lengthSq() > 0;
 }
 
 // ---------- Animation / render loop ----------
@@ -598,11 +601,10 @@ renderer.setAnimationLoop((time, xrFrame) => {
   const dt = clock.getDelta();
 
   // apply movement with xrFrame (if present)
-  applyLocalMovement(dt, xrFrame);
+  const moving = applyLocalMovement(dt, xrFrame);
 
   // local player animation
   if (local.mixer) {
-    const moving = keys['w'] || keys['s'] || keys['a'] || keys['d'];
     switchAnim(local, moving ? 'walk' : 'idel');
     local.mixer.update(dt);
   }
