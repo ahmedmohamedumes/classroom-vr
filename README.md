@@ -47,12 +47,11 @@ server/
 
 Browsers require HTTPS for WebXR and microphone access on non-localhost origins. Options:
 
-**Option 1 — ngrok (easiest):**
+**Option 1 — ADB reverse port forwarding (easiest, no HTTPS needed):**
 ```bash
-npm start          # runs on port 3000
-ngrok http 3000    # exposes an https:// tunnel
+adb reverse tcp:3000 tcp:3000
 ```
-Open the ngrok `https://` URL on your headset.
+Then open `http://localhost:3000` in the Meta Browser on your headset.
 
 **Option 2 — local self-signed cert:**
 ```bash

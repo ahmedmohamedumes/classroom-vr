@@ -32,7 +32,16 @@
     <div id="active-calls" style="margin-top:8px; font-size:12px;"></div>
   </div>
 
-  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <!-- Import map: lets Three.js add-ons resolve the bare "three" specifier -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/three/build/three.module.js",
+      "three/addons/": "/three/examples/jsm/"
+    }
+  }
+  </script>
+  <script src="/socket.io/socket.io.js"></script>
   <script type="module" src="main.js"></script>
 </body>
 </html>

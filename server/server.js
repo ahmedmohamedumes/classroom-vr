@@ -1,5 +1,7 @@
 // server.js
-import { createServer } from "http";
+import { createServer as createHttpServer } from "http";
+import { createServer as createHttpsServer } from "https";
+import { readFileSync, existsSync } from "fs";
 import { Server } from "socket.io";
 import express from "express";
 import { fileURLToPath } from "url";
@@ -10,8 +12,22 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(express.static(join(__dirname, "public")));
+app.use("/three", express.static(join(__dirname, "node_modules/three")));
 
-const httpServer = createServer(app);
+const certPath = join(__dirname, "cert.pem");
+const keyPath = join(__dirname, "key.pem");
+
+let httpServer;
+if (existsSync(certPath) && existsSync(keyPath)) {
+  httpServer = createHttpsServer(
+    { cert: readFileSync(certPath), key: readFileSync(keyPath) },
+    app
+  );
+  console.log("🔒 HTTPS mode enabled");
+} else {
+  httpServer = createHttpServer(app);
+  console.log("⚠️  HTTP mode (no cert/key found)");
+}
 
 const io = new Server(httpServer, {
   cors: { origin: "*", methods: ["GET", "POST"] },
@@ -86,5 +102,8 @@ io.on("connection", (socket) => {
 });
 
 httpServer.listen(PORT, () => {
-  console.log(`🚀 Socket.IO server running on port ${PORT}`);
+  const protocol = (existsSync(certPath) && existsSync(keyPath)) ? "https" : "http";
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`   Local:   ${protocol}://localhost:${PORT}`);
+  console.log(`   Quest 3: ${protocol}://<your-pc-ip>:${PORT}  (find IP with: ipconfig)`);
 });

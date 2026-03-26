@@ -1,7 +1,7 @@
 // client/main.js
-import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.164.0/build/three.module.js";
-import { VRButton } from "https://cdn.jsdelivr.net/npm/three@0.164.0/examples/jsm/webxr/VRButton.js";
-import { createLocalPlayer, createRemotePlayer, updateRemoteTarget, interpolateRemotes } from "./player.js";
+import * as THREE from "three";
+import { VRButton } from "three/addons/webxr/VRButton.js";
+import { createLocalPlayer, createRemotePlayer, updateRemoteTarget, interpolateRemotes, switchAnim } from "./player.js";
 
 // ---------- Socket.IO ----------
 const socket = io(); // ensure this connects to the same origin
@@ -140,22 +140,53 @@ function updatePlayerDropdown() {
   }
 }
 
-// Camera follow local
+// Camera follow local (third-person orbit using mouse yaw/pitch)
+const CAM_DISTANCE = 4;
+const CAM_HEIGHT_OFFSET = 1.6;
 function updateCamera() {
-  // camera offset behind local player (not applied while in VR; headset controls camera)
-  const camOffset = new THREE.Vector3(0, 1.6, 4);
-  const target = new THREE.Vector3().copy(local.mesh.position).add(camOffset);
-  // Only lerp camera for non-VR or spectator view: when XR presenting, the XR camera will be used.
-  if (!renderer.xr.isPresenting) {
-    camera.position.lerp(target, 0.1);
-    camera.lookAt(local.mesh.position);
-  }
+  if (renderer.xr.isPresenting) return;
+
+  const sinYaw   = Math.sin(cameraYaw);
+  const cosYaw   = Math.cos(cameraYaw);
+  const sinPitch = Math.sin(cameraPitch);
+  const cosPitch = Math.cos(cameraPitch);
+
+  // Spherical offset: camera sits behind & above player based on yaw/pitch
+  const offsetX = CAM_DISTANCE * sinYaw * cosPitch;
+  const offsetY = CAM_DISTANCE * sinPitch + CAM_HEIGHT_OFFSET;
+  const offsetZ = CAM_DISTANCE * cosYaw * cosPitch;
+
+  const desired = local.mesh.position.clone().add(new THREE.Vector3(offsetX, offsetY, offsetZ));
+  // Clamp vertical position inside the room (floor y=0, ceiling y=4)
+  desired.y = Math.max(0.8, Math.min(3.85, desired.y));
+  camera.position.lerp(desired, 0.15);
+
+  // Look slightly above mesh base (eye level)
+  const lookAt = local.mesh.position.clone().add(new THREE.Vector3(0, 1.0, 0));
+  camera.lookAt(lookAt);
 }
 
 // ---------- Keyboard input ----------
 const keys = {};
 window.addEventListener('keydown', (e)=>keys[e.key.toLowerCase()] = true);
 window.addEventListener('keyup', (e)=>keys[e.key.toLowerCase()] = false);
+
+// ---------- Mouse look (Pointer Lock) ----------
+let cameraYaw = Math.PI;   // start facing into the room (toward -Z)
+let cameraPitch = 0.2;     // slight downward tilt
+const MOUSE_SENSITIVITY = 0.002;
+const PITCH_LIMIT = Math.PI / 2 - 0.05;
+
+renderer.domElement.addEventListener('click', () => {
+  if (!renderer.xr.isPresenting) renderer.domElement.requestPointerLock();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (document.pointerLockElement !== renderer.domElement) return;
+  cameraYaw   -= e.movementX * MOUSE_SENSITIVITY;
+  cameraPitch -= e.movementY * MOUSE_SENSITIVITY;
+  cameraPitch  = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, cameraPitch));
+});
 
 // ---------- Networking (Socket.IO handlers) ----------
 socket.on("connect", () => {
@@ -508,11 +539,13 @@ function applyLocalMovement(dt, xrFrame = null) {
   const speed = 2.5; // m/s
   const dir = new THREE.Vector3();
 
-  // Keyboard (PC)
-  if (keys['w']) dir.z -= 1;
-  if (keys['s']) dir.z += 1;
-  if (keys['a']) dir.x -= 1;
-  if (keys['d']) dir.x += 1;
+  // Keyboard (PC) — camera-relative so W always moves toward where you're looking
+  const forward = new THREE.Vector3(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
+  const right   = new THREE.Vector3( Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
+  if (keys['w']) dir.add(forward);
+  if (keys['s']) dir.sub(forward);
+  if (keys['a']) dir.sub(right);
+  if (keys['d']) dir.add(right);
 
   // XR joystick (only if we're in an XR frame)
   if (xrFrame) {
@@ -545,9 +578,14 @@ function applyLocalMovement(dt, xrFrame = null) {
   const resolved = resolveCollision(local.mesh.position, proposed);
   local.mesh.position.copy(resolved);
 
+  // Rotate character to face movement direction
+  if (dir.lengthSq() > 0) {
+    local.mesh.rotation.y = Math.atan2(dir.x, dir.z);
+  }
+
   // Only lock Y when not presenting in XR: in XR the headset controls view height.
   if (!renderer.xr.isPresenting) {
-    local.mesh.position.y = 1.0;
+    local.mesh.position.y = 0;
   }
 }
 
@@ -561,6 +599,13 @@ renderer.setAnimationLoop((time, xrFrame) => {
 
   // apply movement with xrFrame (if present)
   applyLocalMovement(dt, xrFrame);
+
+  // local player animation
+  if (local.mixer) {
+    const moving = keys['w'] || keys['s'] || keys['a'] || keys['d'];
+    switchAnim(local, moving ? 'walk' : 'idel');
+    local.mixer.update(dt);
+  }
 
   updateCamera();
   trySendState(performance.now());
